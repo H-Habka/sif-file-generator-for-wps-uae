@@ -73,6 +73,34 @@ function nowDubai() {
   };
 }
 
+// SIF History Database
+const HISTORY_FILE = path.join(process.cwd(), "sif_history.json");
+
+function loadHistory() {
+  if (!fs.existsSync(HISTORY_FILE)) {
+    return { records: [] };
+  }
+  try {
+    const content = fs.readFileSync(HISTORY_FILE, "utf8");
+    return JSON.parse(content);
+  } catch (err) {
+    console.warn("⚠️  Could not read history file, starting fresh.");
+    return { records: [] };
+  }
+}
+
+function saveHistory(history) {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), "utf8");
+  } catch (err) {
+    console.warn("⚠️  Could not save history file:", err.message);
+  }
+}
+
+function checkDuplicateMonth(history, salaryMonth) {
+  return history.records.find(r => r.salaryMonth === salaryMonth);
+}
+
 
 
 // -------------------- MAIN --------------------
@@ -228,9 +256,10 @@ for (const [idx, raw] of rows.entries()) {
   }
 
   // Build EDR line (Mashreq comma-separated order)
+  const employeeId = String(r.employee_id).trim().padStart(14, "0");
   const edr = [
     "EDR",
-    String(r.employee_id).trim(),
+    employeeId,
     employeeRouting,
     employeeIban,
     startISO,
@@ -264,6 +293,22 @@ const salaryMonth = guessedSalaryMonth || (() => {
 const creationDate = now.dateISO; // YYYY-MM-DD
 const creationTime = now.hhmm;    // HHMM
 
+// Check for duplicate salary month in history
+const history = loadHistory();
+const existing = checkDuplicateMonth(history, salaryMonth);
+if (existing) {
+  console.error("❌ DUPLICATE SALARY MONTH DETECTED!");
+  console.error(`   A SIF file for month "${salaryMonth}" already exists:`);
+  console.error(`   File: ${existing.fileName}`);
+  console.error(`   Created: ${existing.createdAt} ${existing.createdTime}`);
+  console.error(`   Employees: ${existing.employeeCount}`);
+  console.error(`   Total Amount: ${existing.totalAmount} ${existing.currency}`);
+  console.error("");
+  console.error("   To prevent mistakes, generation is blocked.");
+  console.error("   If you need to regenerate, please delete the old record from sif_history.json");
+  process.exit(1);
+}
+
 // Build SCR header/summary
 const scr = [
   "SCR",
@@ -280,9 +325,26 @@ const scr = [
 
 // Output
 const defaultName = `${EMPLOYER_ID}${nowDubai().dateTime}.sif`;
-const outPath =  path.join(process.cwd(), defaultName)
+const outPath = path.join(process.cwd(), defaultName);
 const all = [scr, ...edrLines].join("\n");
 fs.writeFileSync(outPath, all, "utf8");
+
+// Add record to history
+const record = {
+  fileName: defaultName,
+  filePath: outPath,
+  salaryMonth: salaryMonth,
+  createdAt: creationDate,
+  createdTime: creationTime,
+  employeeCount: count,
+  totalAmount: to2(totalAmount),
+  currency: CURRENCY,
+  employerId: EMPLOYER_ID,
+  inputFile: inputPath,
+  timestamp: new Date().toISOString()
+};
+history.records.push(record);
+saveHistory(history);
 
 console.log("✅ SIF generated");
 console.log("   File:", outPath);
@@ -290,6 +352,7 @@ console.log("   Employees:", count);
 console.log("   Total amount:", to2(totalAmount));
 console.log("   Salary month:", salaryMonth);
 console.log("   Created (Dubai):", creationDate, creationTime);
+console.log("   Record saved to:", HISTORY_FILE);
 
 // Friendly reminder if routing is a placeholder
 if (!/^\d{9}$/.test(EMPLOYER_ROUTING)) {
