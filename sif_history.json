@@ -1,5 +1,17 @@
 {
   "records": [
-  
+    {
+      "fileName": "0000002571863260103164831.sif",
+      "filePath": "D:\\work\\hazza\\sif file generator\\sif file generator\\0000002571863260103164831.sif",
+      "salaryMonth": "122025",
+      "createdAt": "2026-01-03",
+      "createdTime": "1648",
+      "employeeCount": 9,
+      "totalAmount": "49150.00",
+      "currency": "AED",
+      "employerId": "0000002571863",
+      "inputFile": "input/input.xlsx",
+      "timestamp": "2026-01-03T12:48:31.412Z"
+    }
   ]
 }
