@@ -4,7 +4,8 @@
   "description": "A Node.js project to read and write Excel files using the xlsx package.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/make_sif_hardcoded.mjs -i input/input.csv"
+    "start": "node src/make_sif_hardcoded.mjs --month MMYYYY",
+    "generate": "node src/make_sif_hardcoded.mjs"
   },
   "dependencies": {
     "moment": "^2.30.1",

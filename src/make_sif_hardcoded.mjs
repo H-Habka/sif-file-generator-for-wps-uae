@@ -101,17 +101,77 @@ function checkDuplicateMonth(history, salaryMonth) {
   return history.records.find(r => r.salaryMonth === salaryMonth);
 }
 
+function parseMonthMMYYYY(monthStr) {
+  // Parse MMYYYY format (e.g., "122025" for December 2025)
+  const s = String(monthStr).trim();
+  if (!/^\d{6}$/.test(s)) {
+    return null;
+  }
+  const month = parseInt(s.substring(0, 2), 10);
+  const year = parseInt(s.substring(2, 6), 10);
+  
+  if (month < 1 || month > 12) {
+    return null;
+  }
+  if (year < 2000 || year > 2100) {
+    return null;
+  }
+  
+  return { month, year };
+}
+
+function getMonthStartEnd(month, year) {
+  // Get first and last day of the month
+  const startDate = new Date(Date.UTC(year, month - 1, 1));
+  const endDate = new Date(Date.UTC(year, month, 0)); // Day 0 of next month = last day of current month
+  
+  const startISO = `${year}-${String(month).padStart(2, "0")}-01`;
+  const endDay = endDate.getUTCDate();
+  const endISO = `${year}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+  
+  return { startISO, endISO };
+}
+
 
 
 // -------------------- MAIN --------------------
-const inputPath = getArg("--input") || getArg("-i");
+const inputPath = getArg("--input") || getArg("-i") || "input/input.xlsx";
 const outputPathArg = getArg("--output") || getArg("-o");
-if (!inputPath) die(`Usage: node make_sif_hardcoded.mjs --input ./employees.xlsx [--output ./salary.sif]`);
+const monthArg = getArg("--month") || getArg("-m");
+
+if (!monthArg) {
+  die(`Missing required --month argument. Format: MMYYYY (e.g., 122025 for December 2025)\nUsage: node make_sif_hardcoded.mjs [--input ./employees.xlsx] --month MMYYYY [--output ./salary.sif]\nExample: node make_sif_hardcoded.mjs --month 122025`);
+}
+
+// Parse and validate month
+const monthInfo = parseMonthMMYYYY(monthArg);
+if (!monthInfo) {
+  die(`Invalid month format: "${monthArg}". Expected MMYYYY (e.g., 122025 for December 2025)`);
+}
+
+// Calculate period dates from month
+const { startISO: periodStartISO, endISO: periodEndISO } = getMonthStartEnd(monthInfo.month, monthInfo.year);
+const periodDays = daysInclusive(periodStartISO, periodEndISO);
+const salaryMonth = `${String(monthInfo.month).padStart(2, "0")}${monthInfo.year}`;
+
 if (!fs.existsSync(inputPath)) die(`Input not found: ${inputPath}`);
 
-const wb = XLSX.readFile(inputPath);
+// Validate file extension (only XLSX/XLS files)
+const ext = path.extname(inputPath).toLowerCase();
+if (![".xlsx", ".xls"].includes(ext)) {
+  die(`Input file must be an Excel file (.xlsx or .xls). Got: ${ext || "no extension"}`);
+}
+
+// Read XLSX file
+let wb;
+try {
+  wb = XLSX.readFile(inputPath);
+} catch (err) {
+  die(`Failed to read Excel file: ${err.message}. Make sure the file is a valid .xlsx or .xls file.`);
+}
+
 const sheetName = wb.SheetNames[0];
-if (!sheetName) die("No sheets found.");
+if (!sheetName) die("No sheets found in the Excel file.");
 const ws = wb.Sheets[sheetName];
 
 // defval keeps blanks as "" (not undefined)
@@ -132,9 +192,6 @@ const mapping = {
   employee_id: ["employee_id","emp_id","id","employeeid","employee id"],
   employee_routing: ["employee_routing","routing","bank_routing","routing_code"],
   employee_iban: ["employee_iban","iban","employee_iban_number","employee iban"],
-  period_start: ["period_start","start_date","salary_start","from_date"],
-  period_end: ["period_end","end_date","salary_end","to_date"],
-  period_days: ["period_days","days","num_days"],
   fixed_amount: ["fixed_amount","fixed","basic","basic_amount"],
   variable_amount: ["variable_amount","variable","allowance","bonus","overtime"],
   unpaid_leave_days: ["unpaid_leave_days","unpaid_days","lwop_days"]
@@ -143,7 +200,6 @@ const mapping = {
 const edrLines = [];
 let totalAmount = 0;
 let count = 0;
-const endMonths = []; // collect MMYYYY from period_end to infer salaryMonth
 
 function excelSerialToISO(serial) {
   // Excel serial: days since 1899-12-30 (Excel's epoch, incl. 1900 leap-year bug)
@@ -216,26 +272,18 @@ for (const [idx, raw] of rows.entries()) {
   const r = pick(raw, mapping);
   const rowNum = idx + 2;
 
-  // Required fields
-  const must = ["employee_id","employee_routing","employee_iban","period_start","period_end","fixed_amount","variable_amount","unpaid_leave_days"];
+  // Required fields (period dates are now provided via --month argument)
+  const must = ["employee_id","employee_routing","employee_iban","fixed_amount","variable_amount","unpaid_leave_days"];
   for (const m of must) {
     if (r[m] === undefined || r[m] === null || String(r[m]).trim() === "") {
       die(`Row ${rowNum}: Missing required "${m}"`);
     }
   }
 
-  const startISO = parseDateAny(String(r.period_start));
-  const endISO = parseDateAny(String(r.period_end));
-  if (!startISO) die(`Row ${rowNum}: Invalid period_start "${r.period_start}" (YYYY-MM-DD).`);
-  if (!endISO) die(`Row ${rowNum}: Invalid period_end "${r.period_end}" (YYYY-MM-DD).`);
-
-  let days = Number(r.period_days);
-  if (!Number.isFinite(days) || days <= 0) {
-    days = daysInclusive(startISO, endISO);
-    if (!Number.isFinite(days) || days <= 0) {
-      die(`Row ${rowNum}: period_days missing/invalid and cannot be derived.`);
-    }
-  }
+  // Use the calculated period dates from --month argument
+  const startISO = periodStartISO;
+  const endISO = periodEndISO;
+  const days = periodDays;
 
   const fixed = Number(String(r.fixed_amount).replace(/,/g,""));
   const variable = Number(String(r.variable_amount).replace(/,/g,""));
@@ -273,21 +321,11 @@ for (const [idx, raw] of rows.entries()) {
   edrLines.push(edr);
   totalAmount += fixed + variable;
   count += 1;
-
-  // derive MMYYYY from period_end
-  const [Y, M] = endISO.split("-");
-  endMonths.push(`${M}${Y}`);
 }
 if (count === 0) die("No valid employee rows found.");
 
-// Auto: salaryMonth from most common period_end month; else today's month
-const guessedSalaryMonth = mostCommon(endMonths);
+// salaryMonth is already calculated from --month argument above
 const now = nowDubai();
-const salaryMonth = guessedSalaryMonth || (() => {
-  const d = now.dateISO; // YYYY-MM-DD
-  const [Y, M] = d.split("-");
-  return `${M}${Y}`;
-})();
 
 // Auto: creationDate / creationTime (Dubai)
 const creationDate = now.dateISO; // YYYY-MM-DD
@@ -350,7 +388,7 @@ console.log("✅ SIF generated");
 console.log("   File:", outPath);
 console.log("   Employees:", count);
 console.log("   Total amount:", to2(totalAmount));
-console.log("   Salary month:", salaryMonth);
+console.log("   Salary month:", salaryMonth, `(Period: ${periodStartISO} to ${periodEndISO}, ${periodDays} days)`);
 console.log("   Created (Dubai):", creationDate, creationTime);
 console.log("   Record saved to:", HISTORY_FILE);
 
